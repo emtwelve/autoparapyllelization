@@ -1,10 +1,8 @@
 
 def looping_fn(hi):
   A = []*10
-  for i in range(10):
-    A[i] = i
-
-  for j in range(5):
-    A[5-j] = j
-
+  B = []*10
+  for i in xrange(0, 5):
+    A[i+5] = A[i+0]
+    B[i+0] = B[i+4]
   return A
