@@ -29,8 +29,6 @@ class ReplaceWithConstant(ast.NodeTransformer):
       return node # don't change
 
 
-hi = None
-
 def build_expression_map(v, LHS, RHS):
   exp_map = []
 
@@ -71,6 +69,8 @@ class ArrayVisitor(ast.NodeVisitor):
     assert(len(node.targets) == 1)
     v = self.loopVar
 
+    # Generate a mapping of
+    #   Constant -> Expression computed with Value replaced with Constant
     exp_map = build_expression_map(v, LHS, RHS)
 
     has_independent_iterations = True
@@ -125,7 +125,6 @@ class FuncVisitor(ast.NodeVisitor):
   def visit_Return(self, node):
     print "Return found"
   """
-
 
 tree = ast.parse(program)
 
