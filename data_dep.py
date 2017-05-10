@@ -11,10 +11,18 @@ program = open(argv[1], 'r').read()
 
 print "####\n", program, "####"
 
+# For identifying array accesses
+UNIQUE_ID = 0
+
 def cprint(node, s):
   """ Print s indented by node.col_offset """
   print " "*node.col_offset + s
 
+######################################################
+"""###################################################
+AST Modifiers:
+"""###################################################
+######################################################
 class ReplaceWithConstant(ast.NodeTransformer):
   """ Replace variable with identifier id with a constant """
   def __init__(self, constant, _id):
@@ -26,25 +34,34 @@ class ReplaceWithConstant(ast.NodeTransformer):
     else:
       return node # don't change
 
-
-def build_expression_map(v, LHS, RHS):
+######################################################
+"""###################################################
+Expression map builders and wrappers:
+"""###################################################
+######################################################
+def build_expression_map(v, exp):
   exp_map = []
 
   for i in xrange(v.lower, v.upper, v.step):
-    _LHS = deepcopy(LHS)
-    _RHS = deepcopy(RHS)
-    ReplaceWithConstant(i, v.id).visit(_LHS)
-    ReplaceWithConstant(i, v.id).visit(_RHS)
-    ast.fix_missing_locations(_LHS)
-    ast.fix_missing_locations(_RHS)
-
-    LHS_val = eval(compile(ast.Expression(_LHS), filename="<ast>", mode="eval"))
-    RHS_val = eval(compile(ast.Expression(_RHS), filename="<ast>", mode="eval"))
-
+    _exp = deepcopy(exp)
+    ReplaceWithConstant(i, v.id).visit(_exp)
+    ast.fix_missing_locations(_exp)
+    exp_val = eval(compile(ast.Expression(_exp), filename="<ast>", mode="eval"))
     exp_map += [(_LHS, LHS_val, _RHS, RHS_val)]
 
   return exp_map
 
+## Deprecated...
+def computeExpression(exp_map, i, typ):
+  if   typ == "LHS": return exp_map[i][1]
+  elif typ == "RHS": return exp_map[i][3]
+  else: print('invalid type'); assert(False)
+
+######################################################
+"""###################################################
+Expression and Subscript string building and printing:
+"""###################################################
+######################################################
 def opToStr(op):
   if isinstance(op, ast.Add): return "+"
   if isinstance(op, ast.Sub): return "-"
@@ -66,16 +83,30 @@ def printSubscript(S):
   assert(isinstance(S, ast.Subscript))
   print buildSubscriptString(S)
 
+######################################################
+"""###################################################
+ArrayAccess and Iterator class definitions:
+"""###################################################
+######################################################
 class ArrayAccess(object):
-  def __init__(self, _array_name, _indexing_exp, _access_type, _iterators):
+  def __init__(self, _array_name, _indexing_exp, _access_type, _iterators, _lineno):
     self.array_name = _array_name
     self.access_type = _access_type
     self.indexing_exp = _indexing_exp
     self.iterators = _iterators
+    self.lineno = _lineno
+    global UNIQUE_ID
+    self.unique_id = UNIQUE_ID
+    UNIQUE_ID += 1
   def __str__(self):
-    return "ACCESS{" + self.array_name + "[" + buildExpressionString(self.indexing_exp) + "]" + \
-           " " + self.access_type + " " + str(self.iterators) + "}"
-  def __repr__(self): return self.__str__()
+    return "ACCESS_" + str(self.unique_id) + \
+           "{" + \
+              self.array_name + \
+              "[" + buildExpressionString(self.indexing_exp) + "]" + \
+              " " + self.access_type + " " + "line:"+str(self.lineno) + \
+              " " + str(self.iterators) + "}"
+  def __repr__(self):
+    return self.__str__()
 
 class Iterator(object):
   def __init__(self, _id, lower, upper,  _depth, step=1):
@@ -90,12 +121,11 @@ class Iterator(object):
            str(self.step) + "]}"
   def __repr__(self): return self.__str__()
 
-def computeExpression(exp_map, i, typ):
-  if   typ == "LHS": return exp_map[i][1]
-  elif typ == "RHS": return exp_map[i][3]
-  else: print('invalid type'); assert(False)
-
-
+######################################################
+"""###################################################
+AST node visitor class definition:
+"""###################################################
+######################################################
 class ArrayVisitor(ast.NodeVisitor):
   """ Visit array assignments / uses to gather
       information to use in array dependence
@@ -106,6 +136,9 @@ class ArrayVisitor(ast.NodeVisitor):
     self.arrayAccesses = []
     self.arrayWrites = []
   
+  # When finiding a for loop, get it its iterator,
+  #   calculate one level deeper,
+  #   and look for more array accesses
   def visit_For(self, node):
     cprint(node, "Nested for found")
     global mynode1
@@ -124,25 +157,48 @@ class ArrayVisitor(ast.NodeVisitor):
     for subnode in node.body:
       newArrVisitor.visit(subnode)
 
+  # When finding an assignment statement,
+  #   look for Subscripts and assign their array accesses
+  #   to just the global write access list or both
+  #   the aforementione list and the all accesses list
   def visit_Assign(self, node):
-    global LHS, RHS, hi, mynode, allAccesses
+    global LHS, RHS, hi, mynode, allAccesses, allWriteAccesses
     cprint(node, "Assign found")
     mynode = node
 
-    LHS = node.targets[0].slice.value
-    RHS = node.value.slice.value
+    LHS_accesses = []
+    for subnode in ast.walk(node.targets[0]):
+      print subnode
+      if isinstance(subnode, ast.Subscript):
+        print 'hello'
+        mynode = subnode
+        LHS_accesses.append(subnode)
 
-    left = node.targets[0]
-    left_array_name, left_indexing_exp, left_access_type = left.value.id, left.slice.value, "WRITE"
-    arrAccessWrite = ArrayAccess(left_array_name, left_indexing_exp, left_access_type, deepcopy(self.loopVars))
-    print arrAccessWrite
+    print "YO man"
+    RHS_accesses = []
+    for subnode in ast.walk(node.value):
+      print subnode
+      if isinstance(subnode, ast.Subscript):
+        RHS_accesses.append(subnode)
 
-    right = node.value
-    right_array_name, right_indexing_exp, right_access_type = right.value.id, right.slice.value, "READ"
-    arrAccessRead = ArrayAccess(right_array_name, right_indexing_exp, right_access_type, deepcopy(self.loopVars))
+    for left in LHS_accesses:
+      left_array_name, left_indexing_exp, left_access_type = \
+        left.value.id, left.slice.value, "WRITE"
+      arrAccessWrite = \
+        ArrayAccess(left_array_name, left_indexing_exp,
+                    left_access_type, deepcopy(self.loopVars),
+                    left.lineno)
+      allWriteAccesses += [arrAccessWrite]
+      allAccesses += [arrAccessWrite]
 
-    allWriteAccesses += [arrAccessWrite]
-    allAccesses += [ArrAccessWrite, arrAccessRead]
+    for right in RHS_accesses:
+      right_array_name, right_indexing_exp, right_access_type = \
+        right.value.id, right.slice.value, "READ"
+      arrAccessRead = \
+        ArrayAccess(right_array_name, right_indexing_exp,
+                    right_access_type, deepcopy(self.loopVars),
+                    right.lineno)
+      allAccesses += [arrAccessRead]
     """
     for writeAccess in allWriteAccesses:
       writeDepth = len(writeAccess.iterators) - 1
@@ -178,6 +234,57 @@ class ArrayVisitor(ast.NodeVisitor):
     print has_independent_iterations, LHS_val, RHS_val
     """
 
+
+def DP(doflsts):
+  # Base:
+  if len(doflsts) == 1:
+    d_lst = []
+    for itr, vals in doflsts.items():
+      for val in vals:
+        d_lst.append({itr:val})
+    return  d_lst
+
+  # Recurse:
+  else:
+    key = doflsts.keys()[0]
+    lst = doflsts[key]
+    del doflsts[key]
+    d_lst = DP(doflsts)
+    new_d_lst = []
+    for val in lst:
+      for ds in d_lst:
+        new_d = deepcopy(ds)
+        new_d[key] = val
+        new_d_lst.append(new_d)
+    return new_d_lst
+
+def getEvaluatedIdxAccesses(access):
+  loopIters = access.iterators
+
+  # Generate all possible accesses to the write:
+  doflsts = {}
+  for loopIter in loopIters:
+    doflsts[loopIter.id] = range(loopIter.lower, loopIter.upper, loopIter.step)
+  iter_to_vals = DP(doflsts)
+
+  # Create list of this expression evaluated at all points:
+  evaluated_expressions = []
+  for iter_to_val in iter_to_vals:
+    expression = deepcopy(access.indexing_exp)
+    for itrid, val in iter_to_val.items(): # {i:0, j:0, k:0} mapping
+
+      ReplaceWithConstant(val, itrid).visit(expression)
+      ast.fix_missing_locations(expression)
+
+    evaluated_expressions.append(expression)
+
+  # Generate possible values of access to the array:
+  evaluated_idx_accesses = []
+  for eval_exp in evaluated_expressions:
+    evaluated_idx_accesses.append(eval(compile(ast.Expression(eval_exp), filename="<ast>", mode="eval")))
+
+  return evaluated_idx_accesses
+
 class OutermostForLoopVisitor(ast.NodeVisitor):
   """ Visit all outermost for loops in program """
   def visit(self, node):
@@ -198,38 +305,31 @@ class OutermostForLoopVisitor(ast.NodeVisitor):
     else:
       self.generic_visit(node) # keep searching for for loops
 
-  """
-  def visit_Assign(self, node):
-    print "Assign found"
-  def visit_Return(self, node):
-    print "Return found"
-  """
+if __name__ == "__main__":
+  tree = ast.parse(program)
+  #print "####\n", ast.dump(tree), "####\n"
 
-tree = ast.parse(program)
-
-#print "####\n", ast.dump(tree), "####\n"
-allAccesses = []
-visitor = OutermostForLoopVisitor()
-for node in tree.body:
-  visitor.visit(node)
-  print "OUT"*5
+  # Find all array accesses:
+  allWriteAccesses = []
+  allAccesses = []
+  visitor = OutermostForLoopVisitor()
+  for node in tree.body:
+    visitor.visit(node)
+    #print "~"*5
 
 
-writeAccesses = []
-for access in allAccesses:
-  if access.access_type == "WRITE":
-    writeAccesses.append(access)
-
-print writeAccesses
-for writeAccess in writeAccesses:
-  for access in allAccesses:
-    writeDepth = len(writeAccess.iterators) - 1
-    otherDepth = len(access.iterators) - 1
-
-    # Check if write affects other access
-    #   i.e. on the same or deeper depth
-    #if writeDepth >= otherDepth:
-
+  print allWriteAccesses
+  for writeAccess in allWriteAccesses:
+    for otherAccess in allAccesses:
+      # Check if we are accessing the same array,
+      #   otherwise no dependencies possible:
+      if writeAccess.array_name == otherAccess.array_name and \
+         writeAccess.unique_id != otherAccess.unique_id:
+        print "hello"
+        writeEvaluatedAccesses = set(getEvaluatedIdxAccesses(writeAccess))
+        otherEvaluatedAccesses = set(getEvaluatedIdxAccesses(otherAccess))
+        if len(writeEvaluatedAccesses.intersection(otherEvaluatedAccesses)) != 0:
+          print "Array accesses:\n\t", writeAccess, "and\n\t", otherAccess, "conflict"
 
 
 
