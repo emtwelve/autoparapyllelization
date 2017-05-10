@@ -168,16 +168,12 @@ class ArrayVisitor(ast.NodeVisitor):
 
     LHS_accesses = []
     for subnode in ast.walk(node.targets[0]):
-      print subnode
       if isinstance(subnode, ast.Subscript):
-        print 'hello'
         mynode = subnode
         LHS_accesses.append(subnode)
 
-    print "YO man"
     RHS_accesses = []
     for subnode in ast.walk(node.value):
-      print subnode
       if isinstance(subnode, ast.Subscript):
         RHS_accesses.append(subnode)
 
@@ -318,14 +314,14 @@ if __name__ == "__main__":
     #print "~"*5
 
 
-  print allWriteAccesses
+  #print allWriteAccesses
   for writeAccess in allWriteAccesses:
     for otherAccess in allAccesses:
       # Check if we are accessing the same array,
       #   otherwise no dependencies possible:
       if writeAccess.array_name == otherAccess.array_name and \
          writeAccess.unique_id != otherAccess.unique_id:
-        print "hello"
+        #print "hello"
         writeEvaluatedAccesses = set(getEvaluatedIdxAccesses(writeAccess))
         otherEvaluatedAccesses = set(getEvaluatedIdxAccesses(otherAccess))
         if len(writeEvaluatedAccesses.intersection(otherEvaluatedAccesses)) != 0:
