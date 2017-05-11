@@ -1,26 +1,17 @@
+#!/bin/bash
 
-echo $"Building analyzee"
-#mv setup.py .. & cd ..
-
-echo "from distutils.core import setup
-from Cython.Build import cythonize
-setup(
-    ext_modules = cythonize(\"$1.pyx\")
-)" > tests/$1/setup.py
-cd tests/$1/
-python setup.py build_ext --inplace
-python -c 'import '$1
-rm -rf build/
-rm $1.c setup.py
-cd ../..
-
+echo -e '\033[0;49;93m' # Yellow
+echo "AUTOPARAPYLLELIZATION"
 if [ -z "$1" ]; then
+  echo -e "\033[0;49;91m" # Red
   echo "No input supplied.  Try one of the following tests:"
   ls tests/
   exit 1
 fi
 
-
-echo $"Running parallelizer"
+echo -e "\033[0;49;96m" # Cyan
+echo "Running parallelizer"
 python -i data_dep.py tests/$1/$1.pyx
 
+# Revert terminal colors to default:
+tput sgr0

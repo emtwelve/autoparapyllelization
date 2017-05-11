@@ -10,13 +10,20 @@ def myfn():
   cdef int i, j
   cdef int *cyA = <int *>malloc(len(A)*cython.sizeof(int))
   cdef int *cyB = <int *>malloc(len(B)*cython.sizeof(int))
-
+  
   from datetime import datetime
   startTime = datetime.now();
-  for i in xrange(0, 100000000):
-    cyA[i+0] = 13
-    for j in xrange(0, 100000000):
-      cyB[i+j] = cyA[i+100000000]
+
+  cdef int i, j
+  cdef int *cyA = <int *>malloc(len(A)*cython.sizeof(int))
+  cdef int *cyB = <int *>malloc(len(B)*cython.sizeof(int))
+  with nogil, parallel(num_threads=8):
+    for i in prange(0, 1000, schedule='static'):
+      cyA[i+0] = 13
+      for j in xrange(0, 1000):
+        cyB[i+j] = cyA[i+1000]
+
+
   print datetime.now() - startTime
 
 

@@ -1,6 +1,7 @@
 import ast
 from copy import deepcopy
 from sys import exit
+from collections import defaultdict
 
 from sys import argv
 if len(argv) != 2:
@@ -13,6 +14,9 @@ print "####\n", program, "####"
 
 # For identifying array accesses
 UNIQUE_ID = 0
+PARENT_LOOP_UID = 0
+# LOOP_UID back to its AST object:
+INVERSE_MAPPING = {}
 
 def cprint(node, s):
   """ Print s indented by node.col_offset """
@@ -130,17 +134,18 @@ class ArrayVisitor(ast.NodeVisitor):
   """ Visit array assignments / uses to gather
       information to use in array dependence
       analysis within a For loop """
-  def __init__(self, _newLoopVar, _allLoopVars):
+  def __init__(self, _newLoopVar, _allLoopVars, _parent_loop_uid):
     self.arrays = []
     self.loopVars = _allLoopVars + [_newLoopVar]
     self.arrayAccesses = []
     self.arrayWrites = []
+    self.parent_loop_uid = _parent_loop_uid
   
   # When finiding a for loop, get it its iterator,
   #   calculate one level deeper,
   #   and look for more array accesses
   def visit_For(self, node):
-    cprint(node, "Nested for found")
+    #cprint(node, "Nested for found")
     global mynode1
     mynode1 = node
 
@@ -153,7 +158,7 @@ class ArrayVisitor(ast.NodeVisitor):
     next_depth = self.loopVars[-1].depth + 1 # going one loop deeper
 
     newLoopVar = Iterator(loop_var_id, iter_start, iter_end, next_depth)
-    newArrVisitor = ArrayVisitor(newLoopVar, self.loopVars)
+    newArrVisitor = ArrayVisitor(newLoopVar, self.loopVars, self.parent_loop_uid)
     for subnode in node.body:
       newArrVisitor.visit(subnode)
 
@@ -163,7 +168,7 @@ class ArrayVisitor(ast.NodeVisitor):
   #   the aforementione list and the all accesses list
   def visit_Assign(self, node):
     global LHS, RHS, hi, mynode, allAccesses, allWriteAccesses
-    cprint(node, "Assign found")
+    #cprint(node, "Assign found")
     mynode = node
 
     LHS_accesses = []
@@ -184,8 +189,8 @@ class ArrayVisitor(ast.NodeVisitor):
         ArrayAccess(left_array_name, left_indexing_exp,
                     left_access_type, deepcopy(self.loopVars),
                     left.lineno)
-      allWriteAccesses += [arrAccessWrite]
-      allAccesses += [arrAccessWrite]
+      allWriteAccesses[self.parent_loop_uid] += [arrAccessWrite]
+      allAccesses[self.parent_loop_uid] += [arrAccessWrite]
 
     for right in RHS_accesses:
       right_array_name, right_indexing_exp, right_access_type = \
@@ -194,7 +199,7 @@ class ArrayVisitor(ast.NodeVisitor):
         ArrayAccess(right_array_name, right_indexing_exp,
                     right_access_type, deepcopy(self.loopVars),
                     right.lineno)
-      allAccesses += [arrAccessRead]
+      allAccesses[self.parent_loop_uid] += [arrAccessRead]
     """
     for writeAccess in allWriteAccesses:
       writeDepth = len(writeAccess.iterators) - 1
@@ -285,7 +290,11 @@ class OutermostForLoopVisitor(ast.NodeVisitor):
   """ Visit all outermost for loops in program """
   def visit(self, node):
     if isinstance(node, ast.For):
-      cprint(node, "For found")
+      global PARENT_LOOP_UID, INVERSE_MAPPING
+      #cprint(node, "For found")
+      
+      # To reference again later when injecting the Cython superset:
+      INVERSE_MAPPING[PARENT_LOOP_UID] = node
 
       loop_var_id, iter_name, iter_args = node.target.id, node.iter.func.id, node.iter.args
       iter_start, iter_end = iter_args[0], iter_args[1]
@@ -294,29 +303,18 @@ class OutermostForLoopVisitor(ast.NodeVisitor):
 
       depth = 0
       loopVar = Iterator(loop_var_id, iter_start, iter_end, depth)
-      arrVisitor = ArrayVisitor(loopVar, [])
+      arrVisitor = ArrayVisitor(loopVar, [], PARENT_LOOP_UID)
+      PARENT_LOOP_UID += 1
       for subnode in node.body:
         arrVisitor.visit(subnode)
 
     else:
       self.generic_visit(node) # keep searching for for loops
 
-if __name__ == "__main__":
-  tree = ast.parse(program)
-  #print "####\n", ast.dump(tree), "####\n"
-
-  # Find all array accesses:
-  allWriteAccesses = []
-  allAccesses = []
-  visitor = OutermostForLoopVisitor()
-  for node in tree.body:
-    visitor.visit(node)
-    #print "~"*5
-
-
-  #print allWriteAccesses
-  for writeAccess in allWriteAccesses:
-    for otherAccess in allAccesses:
+def canParallelizeLoop(i):
+  canParallelize = True
+  for writeAccess in allWriteAccesses[i]:
+    for otherAccess in allAccesses[i]:
       # Check if we are accessing the same array,
       #   otherwise no dependencies possible:
       if writeAccess.array_name == otherAccess.array_name and \
@@ -326,6 +324,28 @@ if __name__ == "__main__":
         otherEvaluatedAccesses = set(getEvaluatedIdxAccesses(otherAccess))
         if len(writeEvaluatedAccesses.intersection(otherEvaluatedAccesses)) != 0:
           print "Array accesses:\n\t", writeAccess, "and\n\t", otherAccess, "conflict"
+          canParallelize = False
+  return canParallelize
 
 
+if __name__ == "__main__":
+  tree = ast.parse(program)
+  #print "####\n", ast.dump(tree), "####\n"
+
+  # Find all array accesses:
+  allWriteAccesses = defaultdict(list)
+  allAccesses = defaultdict(list)
+  visitor = OutermostForLoopVisitor()
+  for node in tree.body:
+    visitor.visit(node)
+    #print "~"*5
+
+
+  #print allWriteAccesses
+  linesToParellize = []
+  for i in xrange(PARENT_LOOP_UID):
+    if canParallelizeLoop(i):
+      print "Loop", i, "can be parallelized."
+    else:
+      print "Loop", i, "cannot be parallelized."
 
