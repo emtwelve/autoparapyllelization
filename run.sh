@@ -9,11 +9,20 @@ if [ -z "$1" ]; then
   exit 1
 fi
 
+echo -e "\033[0;49;91m" # Red
+if [ -z "$2" ]; then
+  #echo "Number of threads not specified. Reverting to 4 (default)."
+  num_threads=4
+else
+  num_threads=$2
+  #echo "Running with "$2" threads"
+fi
+
 cd tests/$1/
 
 echo -e "\033[0;49;96m" # Cyan
 echo "Running parallelizer"
-python ../../autopar.py $1.pyx # creates a tests/$1/par$1.pyx file
+python ../../autopar.py $1.pyx $num_threads # creates a tests/$1/par$1.pyx file
 
 
 echo -e "\033[0;49;32m" # Green
@@ -46,7 +55,7 @@ echo "Running parallelized analyzee"
 python -c 'from datetime import datetime;startTime = datetime.now();import par'$1';print datetime.now() - startTime'
 
 rm -rf build/
-rm $1.c par$1.c parsetup.py *.so
+rm par$1.c parsetup.py *.so *.pyc
 cd ../..
 
 # Revert terminal colors to default:

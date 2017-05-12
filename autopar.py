@@ -7,16 +7,23 @@ from StringIO import StringIO
 
 
 from sys import argv
-if len(argv) != 2:
-    print "Need program to analyze as argument"
-    assert(False)
+if len(argv) != 3:
+    print "Usage: autopar.py <program.pyx> <num_threads>"
+    exit(-1)
 
 program = open(argv[1], 'r').read()
 
 #print "####\n", program, "####"
 
+
+try:
+  num_thrs = int(argv[2])
+except:
+  print "Second argument must be integer"
+  exit(-1)
+
 # Number of threads to cythonize loops with:
-NUM_THREADS = 4
+NUM_THREADS = num_thrs
 
 # For identifying array accesses
 UNIQUE_ID = 0
@@ -169,6 +176,27 @@ class ArrayVisitor(ast.NodeVisitor):
     newArrVisitor = ArrayVisitor(newLoopVar, self.loopVars, self.parent_loop_uid)
     for subnode in node.body:
       newArrVisitor.visit(subnode)
+
+
+  def visit_AugAssign(self, node):
+    global allWriteAccesses
+    allWriteAccesses[self.parent_loop_uid].append(-1)
+  """
+    RHS_accesses = []
+    for subnode in ast.walk(node.value):
+      if isinstance(subnode, ast.Subscript):
+        RHS_accesses.append(subnode)
+    for right in RHS_accesses:
+      right_array_name, right_indexing_exp, right_access_type = \
+        right.value.id, right.slice.value, "READ"
+      arrAccessRead = \
+        ArrayAccess(right_array_name, right_indexing_exp,
+                    right_access_type, deepcopy(self.loopVars),
+                    right.lineno)
+      allAccesses[self.parent_loop_uid] += [arrAccessRead]
+      INVERSE_MAPPING[self.parent_loop_uid][2] += [right_array_name]
+    self.visit_Assign(node)
+  """
 
   # When finding an assignment statement,
   #   look for Subscripts and assign their array accesses
@@ -327,6 +355,7 @@ class OutermostForLoopVisitor(ast.NodeVisitor):
 def canParallelizeLoop(i):
   canParallelize = True
   for writeAccess in allWriteAccesses[i]:
+    if writeAccess == -1: return False
     for otherAccess in allAccesses[i]:
       # Check if we are accessing the same array,
       #   otherwise no dependencies possible:
@@ -338,6 +367,7 @@ def canParallelizeLoop(i):
         if len(writeEvaluatedAccesses.intersection(otherEvaluatedAccesses)) != 0:
           print "Array accesses:\n\t", writeAccess, "and\n\t", otherAccess, "conflict"
           canParallelize = False
+          return False
   return canParallelize
 
 def getEndLine(forloopnode):

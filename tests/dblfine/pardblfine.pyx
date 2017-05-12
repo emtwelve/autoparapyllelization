@@ -18,7 +18,6 @@ with nogil, parallel(num_threads=4):
       for cyj in prange(0, 100):
           cyB[(cyi + cyj)] = cyA[(cyi + 100)]
 
-
 # Loop 1: [ Parallelizable ]
 with nogil, parallel(num_threads=4):  
   for cyi in prange(0, 100):
