@@ -1,3 +1,4 @@
 tests/build/
 tests/*.so
 tests/*.c
+*.pyc
