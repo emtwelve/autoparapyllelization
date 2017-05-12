@@ -1,7 +1,10 @@
 import ast
 from copy import deepcopy
-from sys import exit
+from sys import exit, stdout
 from collections import defaultdict
+from unparser import AstToCython
+from StringIO import StringIO
+
 
 from sys import argv
 if len(argv) != 2:
@@ -10,7 +13,7 @@ if len(argv) != 2:
 
 program = open(argv[1], 'r').read()
 
-print "####\n", program, "####"
+#print "####\n", program, "####"
 
 # For identifying array accesses
 UNIQUE_ID = 0
@@ -146,10 +149,12 @@ class ArrayVisitor(ast.NodeVisitor):
   #   and look for more array accesses
   def visit_For(self, node):
     #cprint(node, "Nested for found")
-    global mynode1
+    global mynode1, INVERSE_MAPPING
     mynode1 = node
 
     loop_var_id, iter_name, iter_args = node.target.id, node.iter.func.id, node.iter.args
+    INVERSE_MAPPING[self.parent_loop_uid][1] += [loop_var_id]
+
     iter_start, iter_end = iter_args[0], iter_args[1]
 
     assert(len(iter_args) in [1,2]) # TODO: add 3 for step argument
@@ -167,7 +172,7 @@ class ArrayVisitor(ast.NodeVisitor):
   #   to just the global write access list or both
   #   the aforementione list and the all accesses list
   def visit_Assign(self, node):
-    global LHS, RHS, hi, mynode, allAccesses, allWriteAccesses
+    global LHS, RHS, hi, mynode, allAccesses, allWriteAccesses, INVERSE_MAPPING
     #cprint(node, "Assign found")
     mynode = node
 
@@ -191,6 +196,8 @@ class ArrayVisitor(ast.NodeVisitor):
                     left.lineno)
       allWriteAccesses[self.parent_loop_uid] += [arrAccessWrite]
       allAccesses[self.parent_loop_uid] += [arrAccessWrite]
+      INVERSE_MAPPING[self.parent_loop_uid][2] += [left_array_name]
+
 
     for right in RHS_accesses:
       right_array_name, right_indexing_exp, right_access_type = \
@@ -200,6 +207,8 @@ class ArrayVisitor(ast.NodeVisitor):
                     right_access_type, deepcopy(self.loopVars),
                     right.lineno)
       allAccesses[self.parent_loop_uid] += [arrAccessRead]
+      INVERSE_MAPPING[self.parent_loop_uid][2] += [right_array_name]
+
     """
     for writeAccess in allWriteAccesses:
       writeDepth = len(writeAccess.iterators) - 1
@@ -294,9 +303,10 @@ class OutermostForLoopVisitor(ast.NodeVisitor):
       #cprint(node, "For found")
       
       # To reference again later when injecting the Cython superset:
-      INVERSE_MAPPING[PARENT_LOOP_UID] = node
+      INVERSE_MAPPING[PARENT_LOOP_UID] = [node, [], []]
 
       loop_var_id, iter_name, iter_args = node.target.id, node.iter.func.id, node.iter.args
+      INVERSE_MAPPING[PARENT_LOOP_UID][1] += [loop_var_id]
       iter_start, iter_end = iter_args[0], iter_args[1]
       assert(len(iter_args) in [1,2]) # TODO: add 3 for step argument
       assert(iter_name == "xrange" or iter_name == "range")
@@ -327,9 +337,103 @@ def canParallelizeLoop(i):
           canParallelize = False
   return canParallelize
 
+def getEndLine(forloopnode):
+  """ Given a forloopnode, return the line number of its last line """
+  end_line = forloopnode.lineno
+  for subnode in ast.walk(forloopnode):
+    if 'lineno' in dir(subnode):
+      end_line = max(end_line, subnode.lineno)
+  return end_line
+
+def modifyColOffsets(forloopnode):
+  """ indent everything by two spaces """
+  for subnode in ast.walk(forloopnode):
+    if 'col_offset' in dir(subnode):
+      subnode.col_offset += 2
+
+def indentAllLinesBy(s, idt):
+  """ indent all lines in s by the indent amount of idt """
+  lines = s.split('\n')
+  for i in xrange(len(lines)):
+    lines[i] = ' '*idt + lines[i] + '\n'
+  return ''.join(lines)
+
+def parallelizeLoop(i):
+  global INVERSE_MAPPING, loop_node, alreadyDefined
+
+  # Get loop information necessary to generate the cython code
+  loop_node, loopIndices, loopArrays = INVERSE_MAPPING[i]
+
+  # Remove duplicates:
+  loopIndices, loopArrays = set(loopIndices), set(loopArrays)
+
+  cythonLoopProlog = ""
+  for loopIndexId in loopIndices:
+    if loopIndexId not in alreadyDefined:
+      cythonLoopProlog += " "*loop_node.col_offset + \
+                          "cdef int cy" + str(loopIndexId) + "\n"
+      alreadyDefined.add(loopIndexId)
+
+  for loopArrayId in loopArrays:
+    if loopArrayId not in alreadyDefined:
+      cythonLoopProlog += " "*loop_node.col_offset + \
+                          "cdef int *cy" + str(loopArrayId) + \
+                          " = <int *>malloc(len(" + str(loopArrayId) + \
+                          ")*cython.sizeof(int))\n"
+      alreadyDefined.add(loopArrayId)
+
+  cythonLoopProlog += " "*loop_node.col_offset + \
+                      "with nogil, parallel(num_threads=8):"
+
+  start_line = loop_node.lineno
+  end_line = getEndLine(loop_node)
+
+  #print start_line, end_line
+
+  cythonizedStream = StringIO()
+  AstToCython(loop_node, cythonizedStream)
+  main_loop = cythonizedStream.getvalue()
+
+  main_loop = indentAllLinesBy(main_loop, 2)
+
+  #print cythonLoopProlog + main_loop
+
+  cythonizedCode = cythonLoopProlog + main_loop
+  return start_line, end_line, cythonizedCode
+
+def createParallelizedOutput(program, toParallelize):
+  prolog = """
+import cython
+from cython import boundscheck, wraparound
+from cython.parallel import prange, parallel
+from libc.stdlib cimport malloc, free
+"""
+
+  print program
+  print toParallelize
+
+  lines = program.split('\n')
+  newlines = []
+  found = False
+  for i in xrange(len(lines)):
+
+    for startlineno, endlineno, code, in toParallelize:
+      if startlineno-1== i:
+        newlines.append(code)
+        found = True
+      elif endlineno == i:
+        found = False
+
+    if not found:
+      newlines.append(lines[i]+'\n')
+
+  finalCython = prolog + ''.join(newlines)
+  print finalCython
+  return finalCython
 
 if __name__ == "__main__":
   tree = ast.parse(program)
+
   #print "####\n", ast.dump(tree), "####\n"
 
   # Find all array accesses:
@@ -342,10 +446,19 @@ if __name__ == "__main__":
 
 
   #print allWriteAccesses
-  linesToParellize = []
+
+  # Global to keep track of line numbers of which loops to parallelize
+  toParallelize = []
+
+  # Global to keep track of which Cython variable names have already been defined
+  alreadyDefined = set([])
+
   for i in xrange(PARENT_LOOP_UID):
     if canParallelizeLoop(i):
+      toParallelize.append(parallelizeLoop(i))
       print "Loop", i, "can be parallelized."
     else:
       print "Loop", i, "cannot be parallelized."
+
+  createParallelizedOutput(program, toParallelize)
 

@@ -20,6 +20,7 @@ for i in xrange(0, 100):
   for j in xrange(0, 100):
     B[j+100] = A[i+99]
 
+"""
 # Loop 3: [ Parallelizable ]
 for i in xrange(0, 100):
   A[i+0] = B[i+0]
@@ -33,4 +34,4 @@ for i in xrange(0, 100):
   for j in xrange(0, 100):
     for k in xrange(99, 109):
       B[j+100] = A[i+k]
-
+"""
