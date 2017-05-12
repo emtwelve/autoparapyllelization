@@ -15,6 +15,9 @@ program = open(argv[1], 'r').read()
 
 #print "####\n", program, "####"
 
+# Number of threads to cythonize loops with:
+NUM_THREADS = 4
+
 # For identifying array accesses
 UNIQUE_ID = 0
 PARENT_LOOP_UID = 0
@@ -359,7 +362,7 @@ def indentAllLinesBy(s, idt):
   return ''.join(lines)
 
 def parallelizeLoop(i):
-  global INVERSE_MAPPING, loop_node, alreadyDefined
+  global INVERSE_MAPPING, loop_node, alreadyDefined, NUM_THREADS
 
   # Get loop information necessary to generate the cython code
   loop_node, loopIndices, loopArrays = INVERSE_MAPPING[i]
@@ -383,7 +386,7 @@ def parallelizeLoop(i):
       alreadyDefined.add(loopArrayId)
 
   cythonLoopProlog += " "*loop_node.col_offset + \
-                      "with nogil, parallel(num_threads=8):"
+                      "with nogil, parallel(num_threads="+str(NUM_THREADS)+"):"
 
   start_line = loop_node.lineno
   end_line = getEndLine(loop_node)
@@ -394,7 +397,7 @@ def parallelizeLoop(i):
   AstToCython(loop_node, cythonizedStream)
   main_loop = cythonizedStream.getvalue()
 
-  main_loop = indentAllLinesBy(main_loop, 2)
+  main_loop = indentAllLinesBy(main_loop, loop_node.col_offset+2)
 
   #print cythonLoopProlog + main_loop
 
@@ -409,8 +412,8 @@ from cython.parallel import prange, parallel
 from libc.stdlib cimport malloc, free
 """
 
-  print program
-  print toParallelize
+  #print program
+  #print toParallelize
 
   lines = program.split('\n')
   newlines = []
@@ -428,7 +431,7 @@ from libc.stdlib cimport malloc, free
       newlines.append(lines[i]+'\n')
 
   finalCython = prolog + ''.join(newlines)
-  print finalCython
+  #print finalCython
   return finalCython
 
 if __name__ == "__main__":
@@ -460,5 +463,9 @@ if __name__ == "__main__":
     else:
       print "Loop", i, "cannot be parallelized."
 
-  createParallelizedOutput(program, toParallelize)
+  parallel_source = createParallelizedOutput(program, toParallelize)
 
+  newfilename = argv[1].split('/')
+  newfilename[-1] = 'par' + newfilename[-1]
+  newfilename = '/'.join(newfilename)
+  open(newfilename, 'w').write(parallel_source)
